@@ -325,6 +325,12 @@ bool bar_bidirectional = false;
 bool bar_reversed = false;
 bool bar_cava_style = false;
 
+// password mask stuff
+bool password_mask_enabled = false;
+int input_length = 0;
+char mask_badge[5] = "*";  // Unicode symbol + \0
+char password_mask[512] = "";
+
 enum IMAGE_FORMAT {
     IMAGE_FORMAT_UNKNOWN,
     IMAGE_FORMAT_RAW,
@@ -567,6 +573,7 @@ static void clear_indicator_cb(EV_P_ ev_timer *w, int revents) {
 
 static void clear_input(void) {
     input_position = 0;
+    input_length = 0;
     clear_password_memory();
     password[input_position] = '\0';
 }
@@ -951,6 +958,7 @@ static void handle_key_press(xcb_key_press_event_t *event) {
             /* decrement input_position to point to the previous glyph */
             u8_dec(password, &input_position);
             password[input_position] = '\0';
+            input_length--;
 
             /* Hide the unlock indicator after a bit if the password buffer is
              * empty. */
@@ -981,6 +989,7 @@ static void handle_key_press(xcb_key_press_event_t *event) {
     /* store it in the password array as UTF-8 */
     memcpy(password + input_position, buffer, n - 1);
     input_position += n - 1;
+    input_length++;
     DEBUG("current password = %.*s\n", input_position, password);
 
     if (unlock_indicator) {
@@ -1743,6 +1752,17 @@ void gif_anim_loop(struct ev_loop *loop, struct ev_timer *timer, int delay) {
     ev_timer_start(loop, timer);
 }
 
+void build_password_mask() {
+    size_t badge_length = strlen(mask_badge);
+    size_t mask_length = badge_length * input_length;
+
+    for (int i = 0; i < input_length; i++) {
+        memcpy(password_mask + i * badge_length, mask_badge, badge_length);
+    }
+    password_mask[mask_length] = '\0';
+    DEBUG("Password mask is %s\n", password_mask);
+}
+
 int main(int argc, char *argv[]) {
     struct passwd *pw;
     char *username;
@@ -1912,6 +1932,10 @@ int main(int argc, char *argv[]) {
         {"bar-cava-style", no_argument, NULL, 712},
         {"bar-cava-decay", required_argument, NULL, 713},
 
+        // password mask stuff
+        {"password-mask", no_argument, NULL, 800},
+        {"mask-badge", required_argument, NULL, 801},
+
         // misc.
         {"redraw-thread", no_argument, NULL, 900},
         {"refresh-rate", required_argument, NULL, 901},
@@ -1955,6 +1979,34 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, #awidth " must be a positive double; ignoring...\n");\
         awidth = 0;\
     }
+
+#define parse_mask_badge(abadge) do {\
+    if (strlen(optarg) > 0) {\
+        size_t src_pos = 0, dst_pos = 0, bytes = 0;\
+        while (optarg[src_pos] != '\0' && bytes < 4) {\
+            unsigned char first_byte = (unsigned char)optarg[src_pos];\
+            int char_len = ((first_byte & 0x80) == 0x00) ? 1 :\
+                          ((first_byte & 0xE0) == 0xC0) ? 2 :\
+                          ((first_byte & 0xF0) == 0xE0) ? 3 :\
+                          ((first_byte & 0xF8) == 0xF0) ? 4 : 0;\
+            if (char_len == 0 || bytes + char_len > 4) break;\
+            int valid = 1;\
+            for (int i = 1; i < char_len; i++) {\
+                if (optarg[src_pos + i] == '\0' ||\
+                    ((unsigned char)optarg[src_pos + i] & 0xC0) != 0x80) {\
+                    valid = 0; break;\
+                }\
+            }\
+            if (!valid) break;\
+            for (int i = 0; i < char_len; i++) {\
+                abadge[dst_pos++] = optarg[src_pos++];\
+            }\
+            bytes += char_len;\
+        }\
+        abadge[dst_pos] = '\0';\
+    }\
+} while(0);
+
 
     while ((o = getopt_long(argc, argv, optstring, longopts, &longoptind)) != -1) {
         switch (o) {
@@ -2584,6 +2636,15 @@ int main(int argc, char *argv[]) {
                     bar_cava_decay = 0.5;
                 break;
 
+            // password mask stuff
+            case 800:
+                password_mask_enabled = true;
+                break;
+            case 801:
+                parse_mask_badge(mask_badge);
+                DEBUG("Mask badge is %s\n", mask_badge);
+                break;
+
 			// Misc
             case 900:
                 redraw_thread = true;
@@ -2851,7 +2912,7 @@ int main(int argc, char *argv[]) {
      * file descriptor becomes readable). */
     ev_invoke(main_loop, xcb_check, 0);
 
-    if (show_clock || bar_enabled || slideshow_enabled) {
+    if (show_clock || bar_enabled || slideshow_enabled || password_mask_enabled) {
         if (redraw_thread) {
             struct timespec ts;
             double s;

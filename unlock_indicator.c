@@ -249,6 +249,12 @@ extern bool bar_bidirectional;
 extern bool bar_reversed;
 extern bool bar_cava_style;
 
+// password mask stuff
+extern bool password_mask_enabled;
+extern int input_length;
+extern char mask_badge;
+extern char password_mask[512];
+
 static cairo_font_face_t *font_faces[6] = {
     NULL,
     NULL,
@@ -721,38 +727,40 @@ static DrawData create_draw_data() {
 }
 
 static void draw_elements(cairo_t *const ctx, DrawData const *const draw_data) {
-    // indicator stuff
-    if (!bar_enabled) {
-        draw_indic(ctx, draw_data->indicator_x, draw_data->indicator_y);
-    } else {
-        if (unlock_state == STATE_KEY_ACTIVE ||
-            unlock_state == STATE_BACKSPACE_ACTIVE) {
-            // note: might be biased to cause more hits on lower indices
-            // maybe see about doing ((double) rand() / RAND_MAX) * bar_count
-            int index = rand() % bar_count;
-            bar_heights[index] = max_bar_height;
-            int tmp_height = max_bar_height;
-            for (int i = 0; i < ((max_bar_height / bar_step) + 1); ++i) {
-                int low_ind = index - i;
-                while (low_ind < 0) {
-                    low_ind += bar_count;
+    if (!password_mask_enabled) {
+        // indicator stuff
+        if (!bar_enabled) {
+            draw_indic(ctx, draw_data->indicator_x, draw_data->indicator_y);
+        } else {
+            if (unlock_state == STATE_KEY_ACTIVE ||
+                unlock_state == STATE_BACKSPACE_ACTIVE) {
+                // note: might be biased to cause more hits on lower indices
+                // maybe see about doing ((double) rand() / RAND_MAX) * bar_count
+                int index = rand() % bar_count;
+                bar_heights[index] = max_bar_height;
+                int tmp_height = max_bar_height;
+                for (int i = 0; i < ((max_bar_height / bar_step) + 1); ++i) {
+                    int low_ind = index - i;
+                    while (low_ind < 0) {
+                        low_ind += bar_count;
+                    }
+                    int high_ind = (index + i) % bar_count;
+                    if (bar_cava_style)
+                        tmp_height = ((double)max_bar_height) * exp(-(bar_cava_decay * i));
+                    else
+                        tmp_height = max_bar_height - (bar_step * i);
+                    if (tmp_height < 0)
+                        tmp_height = 0;
+                    if (bar_heights[low_ind] < tmp_height)
+                        bar_heights[low_ind] = tmp_height;
+                    if (bar_heights[high_ind] < tmp_height)
+                        bar_heights[high_ind] = tmp_height;
+                    if (tmp_height == 0)
+                        break;
                 }
-                int high_ind = (index + i) % bar_count;
-                if (bar_cava_style)
-                    tmp_height = ((double)max_bar_height) * exp(-(bar_cava_decay * i));
-                else
-                    tmp_height = max_bar_height - (bar_step * i);
-                if (tmp_height < 0)
-                    tmp_height = 0;
-                if (bar_heights[low_ind] < tmp_height)
-                    bar_heights[low_ind] = tmp_height;
-                if (bar_heights[high_ind] < tmp_height)
-                    bar_heights[high_ind] = tmp_height;
-                if (tmp_height == 0)
-                    break;
             }
+            draw_bar(ctx, draw_data->bar_x, draw_data->bar_y, draw_data->bar_width, draw_data->screen_x, draw_data->screen_y);
         }
-        draw_bar(ctx, draw_data->bar_x, draw_data->bar_y, draw_data->bar_width, draw_data->screen_x, draw_data->screen_y);
     }
 
     draw_text(ctx, draw_data->status_text);
@@ -927,7 +935,13 @@ void render_lock(uint32_t *resolution, xcb_drawable_t drawable) {
 
     if (greeter_text) {
         draw_data.greeter_text.show = true;
-        strncpy(draw_data.greeter_text.str, greeter_text, sizeof(draw_data.greeter_text.str) - 1);
+        if (password_mask_enabled && input_length > 0) {
+            // replace greeter text by the masked password input
+            build_password_mask();
+            strncpy(draw_data.greeter_text.str, password_mask, sizeof(draw_data.greeter_text.str) - 1);
+        } else {
+            strncpy(draw_data.greeter_text.str, greeter_text, sizeof(draw_data.greeter_text.str) - 1);
+        }
         draw_data.greeter_text.size = greeter_size;
         draw_data.greeter_text.outline_width = greeteroutlinewidth;
         draw_data.greeter_text.font = get_font_face(GREETER_FONT);
